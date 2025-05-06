@@ -1,0 +1,66 @@
+import torch
+import soundfile as sf
+import os
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader, random_split
+import numpy as np
+import librosa
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt
+from pydub import AudioSegment
+
+def convert_mp3_to_wav(mp3_path, wav_path, target_sr=16000):
+    audio = AudioSegment.from_mp3(mp3_path)
+    audio = audio.set_frame_rate(target_sr).set_channels(1)
+    audio.export(wav_path, format="wav")
+    print(f"Converted {mp3_path} to {wav_path} at {target_sr} Hz.")
+
+def preprocess_audio(input_dir, output_dir, sr=16000, n_mels=128):
+    os.makedirs(output_dir, exist_ok=True)
+    for label in ['real', 'fake']:
+        input_class_dir = os.path.join(input_dir, label)
+        output_class_dir = os.path.join(output_dir, label)
+        os.makedirs(output_class_dir, exist_ok=True)
+
+        for file in os.listdir(input_class_dir):
+            if file.endswith('.wav'):
+                y, sr = librosa.load(os.path.join(input_class_dir, file), sr=sr)
+                mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=n_mels)
+                mel_db = librosa.power_to_db(mel, ref=np.max)
+                output_file = os.path.join(output_class_dir, file.replace('.wav', '.npy'))
+                np.save(output_file, mel_db)
+
+class PrecomputedAudioDataset(Dataset):
+    def __init__(self, data_dir, target_shape=(128, 300)):
+        self.file_paths = []
+        self.labels = []
+        self.target_shape = target_shape  # Fixed size for all spectrograms
+
+        for label in ['real', 'fake']:
+            class_dir = os.path.join(data_dir, label)
+            for filename in os.listdir(class_dir):
+                if filename.endswith('.npy'):
+                    self.file_paths.append(os.path.join(class_dir, filename))
+                    self.labels.append(0 if label == 'real' else 1)
+
+    def __len__(self):
+        return len(self.file_paths)
+
+    def __getitem__(self, idx):
+        spec = np.load(self.file_paths[idx])
+
+        # Get target shape
+        target_mels, target_frames = self.target_shape
+
+        # Padding or cropping logic
+        if spec.shape[1] < target_frames:
+            pad_width = target_frames - spec.shape[1]
+            spec = np.pad(spec, ((0, 0), (0, pad_width)), mode='constant')
+        else:
+            spec = spec[:, :target_frames]
+
+        # Convert to tensor and add channel dimension
+        spec_tensor = torch.tensor(spec, dtype=torch.float32).unsqueeze(0)
+        label_tensor = torch.tensor(self.labels[idx], dtype=torch.long)
+        return spec_tensor, label_tensor
