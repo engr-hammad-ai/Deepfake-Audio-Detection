@@ -1,0 +1,50 @@
+import streamlit as st
+import sounddevice as sd
+import numpy as np
+import librosa
+import torch
+from modeldf import DeepFakeAudioDetector
+
+st.title("🎧 Live DeepFake Audio Detector")
+st.write("Record your voice, and the model will predict whether it’s **Real** or **Fake**!")
+
+# Parameters
+sample_rate = 16000
+target_shape = (128, 300)  # Must match training
+
+# Load the trained model
+model = DeepFakeAudioDetector()
+model.load_state_dict(torch.load("C://HAMMAD/AI Data/DeepFake Audio/best_deepfake_detector.pth", map_location=torch.device('cpu')))
+model.eval()
+
+# Record Audio
+duration = st.slider("Select Recording Duration (seconds)", 1, 10, 3)
+
+if st.button("🎙️ Record"):
+    st.info("Recording...")
+    audio = sd.rec(int(duration * sample_rate), samplerate=sample_rate, channels=1, dtype='float32')
+    sd.wait()
+    st.success("Recording complete!")
+
+    # Convert to Mel Spectrogram
+    audio_np = audio.flatten()
+    mel = librosa.feature.melspectrogram(y=audio_np, sr=sample_rate, n_mels=128)
+    mel_db = librosa.power_to_db(mel, ref=np.max)
+
+    # Padding or cropping
+    if mel_db.shape[1] < target_shape[1]:
+        pad_width = target_shape[1] - mel_db.shape[1]
+        mel_db = np.pad(mel_db, ((0, 0), (0, pad_width)), mode='constant')
+    else:
+        mel_db = mel_db[:, :target_shape[1]]
+
+    input_tensor = torch.tensor(mel_db, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
+
+    # Predict
+    with torch.no_grad():
+        output = model(input_tensor)
+        prediction = torch.argmax(output, dim=1).item()
+
+    result = "🟢 Real Audio" if prediction == 0 else "🔴 Fake Audio"
+    st.subheader("Prediction Result")
+    st.write(result)
